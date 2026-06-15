@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0a0a0f">
+<title>Concept Art Tracker — Rodrigo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<!-- Firebase SDKs -->
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+import { getFirestore, doc, getDoc, setDoc, onSnapshot }
+  from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+
+// ─── SUBSTITUA AQUI com suas credenciais do Firebase ───────────────────────
+const firebaseConfig = {
+  apiKey:            "AIzaSyCI6nWYI8_b4VqfRmmRFcj9nunfVIEzcOg",
+  authDomain:        "study-tracker-81e83.firebaseapp.com",
+  projectId:         "study-tracker-81e83",
+  storageBucket:     "study-tracker-81e83.firebasestorage.app",
+  messagingSenderId: "72522360385",
+  appId:             "1:72522360385:web:0da58463009fdf654788c0"
+};
+// ───────────────────────────────────────────────────────────────────────────
+
+const app  = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db   = getFirestore(app);
+
+const provider = new GoogleAuthProvider();
+
+let currentUser = null;
+let unsubscribe  = null;   // listener do Firestore
+let saving       = false;  // lock pra evitar loop de save
+
+// ── Referência do documento do usuário ──────────────────────────────────────
+function userDoc(uid) {
+  return doc(db, 'trackers', uid);
+}
+
+// ── Autenticação ─────────────────────────────────────────────────────────────
+window.doLogin = async () => {
+  try {
+    await signInWithPopup(auth, provider);
+  } catch(e) {
+    alert('Erro ao entrar: ' + e.message);
+  }
+};
+
+window.doLogout = async () => {
+  if (unsubscribe) unsubscribe();
+  await signOut(auth);
+};
+
+onAuthStateChanged(auth, async user => {
+  if (user) {
+    currentUser = user;
+    showApp(user);
+    subscribeData(user.uid);
+  } else {
+    currentUser = null;
+    if (unsubscribe) unsubscribe();
+    showLogin();
+  }
+});
+
+// ── Listener em tempo real do Firestore ──────────────────────────────────────
+function subscribeData(uid) {
+  if (unsubscribe) unsubscribe();
+  unsubscribe = onSnapshot(userDoc(uid), snap => {
+    if (saving) return;           // dado veio do nosso próprio save, ignora
+    if (snap.exists()) {
+      window._data = snap.data();
+      migrateData(window._data);
+    } else {
+      window._data = defaultData();
+      persistData();
+    }
+    refreshCurrentView();
+  });
+}
+
+// ── Salvar no Firestore ───────────────────────────────────────────────────────
+window.persistData = async () => {
+  if (!currentUser) return;
+  saving = true;
+  try {
+    await setDoc(userDoc(currentUser.uid), window._data);
+  } finally {
+    saving = false;
+  }
+};
+
+// ── Helpers de UI ─────────────────────────────────────────────────────────────
+function showLogin() {
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('app-screen').style.display   = 'none';
+}
+
+function showApp(user) {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app-screen').style.display   = 'block';
+  document.getElementById('user-name').textContent = user.displayName || user.email;
+  document.getElementById('user-avatar').src = user.photoURL || '';
+  document.getElementById('user-avatar').style.display = user.photoURL ? 'block' : 'none';
+}
+
+function refreshCurrentView() {
+  const active = document.querySelector('.nav-btn.active');
+  const view   = active ? active.dataset.view : 'dashboard';
+  const renders = {
+    dashboard: window.renderDashboard,
+    registro:  window.renderSessions,
+    rotina:    window.renderRotina,
+    metas:     window.renderMetas,
+    stats:     window.renderStats,
+  };
+  if (renders[view]) renders[view]();
+}
+
+// expor ao escopo global pra os onclick inline funcionarem
+window._auth = auth;
+</script>
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0a0f;--bg2:#111118;--bg3:#1a1a24;--bg4:#22222f;
+  --accent:#c8a96e;--accent2:#7b5ea7;--accent3:#4aa8a0;
+  --text:#f0ede8;--text2:#9b9aaf;--text3:#5c5b70;
+  --red:#e05252;--green:#52c97a;
+  --border:rgba(200,169,110,0.15);--border2:rgba(200,169,110,0.08);
+  --radius:8px;--radius2:4px;
+}
+html,body{min-height:100%;background:var(--bg);color:var(--text);font-family:'Syne',sans-serif;overflow-x:hidden}
+
+/* ── LOGIN ── */
+#login-screen{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:999}
+.login-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:3rem 2.5rem;text-align:center;max-width:360px;width:100%}
+.login-logo{font-family:'Space Mono',monospace;font-size:11px;letter-spacing:3px;color:var(--accent);text-transform:uppercase;margin-bottom:0.5rem}
+.login-title{font-size:22px;font-weight:800;margin-bottom:0.5rem}
+.login-sub{font-size:13px;color:var(--text2);margin-bottom:2rem;line-height:1.5}
+.google-btn{display:flex;align-items:center;justify-content:center;gap:0.75rem;width:100%;padding:0.85rem 1.5rem;background:#fff;color:#1f1f1f;border:none;border-radius:var(--radius2);font-family:'Syne',sans-serif;font-size:14px;font-weight:600;cursor:pointer;transition:all 0.2s}
+.google-btn:hover{background:#f0f0f0;transform:translateY(-1px)}
+.google-btn svg{width:20px;height:20px;flex-shrink:0}
+
+/* ── SCANLINE ── */
+.scanline{position:fixed;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:9999;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.025) 2px,rgba(0,0,0,0.025) 4px)}
+
+/* ── HEADER ── */
+header{padding:1.1rem 2rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--bg);position:sticky;top:0;z-index:100}
+.logo{font-family:'Space Mono',monospace;font-size:11px;letter-spacing:3px;color:var(--accent);text-transform:uppercase}
+.logo span{color:var(--text2)}
+.header-right{display:flex;align-items:center;gap:1rem}
+.date-display{font-family:'Space Mono',monospace;font-size:11px;color:var(--text2)}
+.user-info{display:flex;align-items:center;gap:0.6rem}
+.user-avatar{width:28px;height:28px;border-radius:50%;border:1px solid var(--border)}
+.user-name-label{font-family:'Space Mono',monospace;font-size:10px;color:var(--text2)}
+.logout-btn{font-family:'Space Mono',monospace;font-size:10px;color:var(--text3);background:none;border:1px solid var(--border);padding:3px 10px;border-radius:3px;cursor:pointer;transition:all 0.2s}
+.logout-btn:hover{color:var(--red);border-color:var(--red)}
+.sync-dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
+.sync-dot.syncing{background:var(--accent);box-shadow:0 0 6px var(--accent);animation:pulse 0.8s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+
+/* ── NAV ── */
+nav{display:flex;gap:2px;padding:0 2rem;background:var(--bg2);border-bottom:1px solid var(--border2);overflow-x:auto}
+.nav-btn{padding:0.75rem 1.25rem;font-family:'Syne',sans-serif;font-size:12px;font-weight:600;letter-spacing:1px;text-transform:uppercase;background:none;border:none;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;transition:all 0.2s;white-space:nowrap;flex-shrink:0}
+.nav-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
+.nav-btn:hover:not(.active){color:var(--text)}
+
+main{padding:2rem;max-width:1100px;margin:0 auto}
+.view{display:none}.view.active{display:block}
+
+/* ── STATS CARDS ── */
+.overview-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-bottom:2rem}
+.stat-card{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius);padding:1.25rem;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%;background:var(--accent)}
+.stat-card.purple::before{background:var(--accent2)}
+.stat-card.teal::before{background:var(--accent3)}
+.stat-label{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:2px;color:var(--text2);text-transform:uppercase;margin-bottom:0.5rem}
+.stat-value{font-size:2rem;font-weight:800;color:var(--text);line-height:1}
+.stat-sub{font-size:11px;color:var(--text3);margin-top:0.25rem}
+
+/* ── COURSES ── */
+.courses-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:2rem}
+.course-card{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius);padding:1.5rem}
+.course-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1rem}
+.course-name{font-weight:700;font-size:14px}
+.course-pct{font-family:'Space Mono',monospace;font-size:20px;font-weight:700;color:var(--accent)}
+.progress-track{height:4px;background:var(--bg4);border-radius:2px;overflow:hidden;margin-bottom:0.75rem}
+.progress-fill{height:100%;border-radius:2px;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width 0.5s ease}
+.course-meta{display:flex;justify-content:space-between;font-size:11px;color:var(--text2);font-family:'Space Mono',monospace}
+.course-actions{display:flex;gap:0.5rem;margin-top:0.75rem;flex-wrap:wrap}
+.btn-sm{padding:0.35rem 0.75rem;border:1px solid var(--border);background:transparent;color:var(--text2);font-size:11px;font-family:'Space Mono',monospace;border-radius:var(--radius2);cursor:pointer;transition:all 0.2s}
+.btn-sm:hover{border-color:var(--accent);color:var(--accent)}
+.btn-accent{border-color:var(--accent2);color:var(--accent2)}
+.btn-accent:hover{background:rgba(123,94,167,0.15)}
+
+/* ── GOALS DASH ── */
+.goals-section{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius);padding:1.5rem;margin-bottom:2rem}
+.section-title{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;color:var(--text2);margin-bottom:1rem}
+.goal-item{display:flex;align-items:center;gap:0.75rem;padding:0.6rem 0;border-bottom:1px solid var(--border2)}
+.goal-item:last-child{border-bottom:none}
+.goal-check{width:18px;height:18px;border-radius:3px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.goal-check.done{background:var(--accent);border-color:var(--accent)}
+.goal-check svg{width:10px;height:10px;stroke:var(--bg);stroke-width:3;display:none}
+.goal-check.done svg{display:block}
+.goal-text{font-size:13px;color:var(--text)}
+.goal-text.done{text-decoration:line-through;color:var(--text3)}
+.goal-tag{font-family:'Space Mono',monospace;font-size:10px;padding:2px 8px;border-radius:2px;background:rgba(200,169,110,0.1);color:var(--accent);margin-left:auto;white-space:nowrap}
+
+/* ── CHART ── */
+.chart-section{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius);padding:1.5rem;margin-bottom:2rem}
+.chart-wrap{position:relative;height:220px}
+
+/* ── FORMS ── */
+.log-form{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius);padding:1.5rem;margin-bottom:2rem}
+.form-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;margin-bottom:1rem}
+.form-row-2{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem}
+.form-group{display:flex;flex-direction:column;gap:0.4rem}
+label{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--text2)}
+select,input[type=text],input[type=date],input[type=number]{appearance:none;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:0.6rem 0.75rem;border-radius:var(--radius2);font-family:'Syne',sans-serif;font-size:13px;outline:none;transition:border-color 0.2s;width:100%}
+select:focus,input:focus{border-color:var(--accent)}
+textarea{background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:0.6rem 0.75rem;border-radius:var(--radius2);font-family:'Syne',sans-serif;font-size:13px;outline:none;resize:vertical;width:100%;min-height:60px;transition:border-color 0.2s}
+textarea:focus{border-color:var(--accent)}
+.btn-primary{padding:0.65rem 1.5rem;background:var(--accent);color:var(--bg);font-family:'Space Mono',monospace;font-size:11px;font-weight:700;letter-spacing:1px;border:none;border-radius:var(--radius2);cursor:pointer;transition:all 0.2s;text-transform:uppercase}
+.btn-primary:hover{background:#d4b87e;transform:translateY(-1px)}
+
+/* ── TABLE ── */
+.log-table{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius);overflow:hidden;overflow-x:auto}
+.log-table table{width:100%;border-collapse:collapse;min-width:600px}
+.log-table th{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--text2);padding:0.75rem 1rem;text-align:left;border-bottom:1px solid var(--border2);background:var(--bg3)}
+.log-table td{padding:0.75rem 1rem;border-bottom:1px solid var(--border2);font-size:13px}
+.log-table tr:last-child td{border-bottom:none}
+.log-table tr:hover td{background:rgba(200,169,110,0.03)}
+.tag{display:inline-block;font-family:'Space Mono',monospace;font-size:10px;padding:2px 8px;border-radius:2px}
+.tag-starship{background:rgba(123,94,167,0.15);color:#a88cd4}
+.tag-prometheus{background:rgba(74,168,160,0.15);color:var(--accent3)}
+.tag-general{background:rgba(200,169,110,0.15);color:var(--accent)}
+.tag-personal{background:rgba(224,82,82,0.15);color:#e05252}
+.delete-btn{background:none;border:none;color:var(--text3);cursor:pointer;padding:2px 8px;border-radius:3px;transition:color 0.2s;font-size:14px}
+.delete-btn:hover{color:var(--red)}
+
+/* ── ROTINA ── */
+.week-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:0.75rem;margin-bottom:1.5rem}
+.day-card{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius);padding:1rem;position:relative}
+.day-card.today{border-color:var(--accent);background:rgba(200,169,110,0.05)}
+.today-badge{font-family:'Space Mono',monospace;font-size:8px;letter-spacing:1px;color:var(--accent);position:absolute;top:0.5rem;right:0.5rem}
+.day-name{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:2px;color:var(--text2);text-transform:uppercase;margin-bottom:0.75rem}
+.day-course{font-size:12px;font-weight:700;margin-bottom:0.25rem}
+.day-time{font-family:'Space Mono',monospace;font-size:10px;color:var(--accent);margin-bottom:0.25rem}
+.day-goal{font-size:11px;color:var(--text2)}
+.day-done{display:flex;align-items:center;gap:0.4rem;margin-top:0.75rem;font-family:'Space Mono',monospace;font-size:10px;color:var(--text3);cursor:pointer;user-select:none}
+.day-done input{accent-color:var(--accent);width:14px;height:14px;cursor:pointer}
+.day-done.checked{color:var(--green)}
+.streak-bar{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius);padding:1.25rem}
+
+/* ── METAS ── */
+.goals-full{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.goal-area{background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius);padding:1.5rem;position:relative}
+.goal-area-title{font-size:14px;font-weight:700;margin-bottom:0.25rem}
+.goal-area-desc{font-size:12px;color:var(--text2);margin-bottom:1rem}
+.goal-progress{height:3px;background:var(--bg4);border-radius:2px;overflow:hidden}
+.goal-progress-fill{height:100%;background:var(--accent3);border-radius:2px;transition:width 0.4s}
+.milestones{margin-top:1rem;display:flex;flex-direction:column;gap:0.5rem}
+.milestone{display:flex;align-items:center;gap:0.5rem;font-size:12px;color:var(--text2);cursor:pointer;user-select:none}
+.milestone input{accent-color:var(--accent2);cursor:pointer;width:14px;height:14px}
+.milestone.done-m span{text-decoration:line-through;color:var(--text3)}
+.goal-card-actions{position:absolute;top:1rem;right:1rem;display:flex;gap:0.4rem;opacity:0;transition:opacity 0.2s}
+.goal-area:hover .goal-card-actions{opacity:1}
+.icon-btn{width:28px;height:28px;border-radius:4px;border:1px solid var(--border);background:var(--bg3);color:var(--text2);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:13px;transition:all 0.2s}
+.icon-btn:hover{border-color:var(--accent);color:var(--accent)}
+.icon-btn.del:hover{border-color:var(--red);color:var(--red)}
+.milestone-row{display:flex;align-items:center;gap:0.4rem}
+.milestone-del{background:none;border:none;color:var(--text3);cursor:pointer;font-size:12px;padding:0 3px;line-height:1;transition:color 0.15s;opacity:0}
+.milestone-row:hover .milestone-del{opacity:1}
+.milestone-del:hover{color:var(--red)}
+.add-milestone-row{display:flex;gap:0.5rem;margin-top:0.75rem}
+.add-milestone-row input{flex:1;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:0.4rem 0.6rem;border-radius:var(--radius2);font-family:'Syne',sans-serif;font-size:12px;outline:none}
+.add-milestone-row input:focus{border-color:var(--accent2)}
+.add-milestone-row button{padding:0.4rem 0.75rem;background:rgba(123,94,167,0.2);border:1px solid var(--accent2);color:var(--accent2);border-radius:var(--radius2);font-size:11px;font-family:'Space Mono',monospace;cursor:pointer;white-space:nowrap}
+
+/* ── MODAL ── */
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:500;display:flex;align-items:center;justify-content:center;padding:1rem}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:1.75rem;width:100%;max-width:480px}
+.modal-title{font-family:'Space Mono',monospace;font-size:11px;letter-spacing:3px;text-transform:uppercase;color:var(--accent);margin-bottom:1.25rem}
+.modal-actions{display:flex;gap:0.75rem;margin-top:1.25rem;justify-content:flex-end}
+.btn-cancel{padding:0.55rem 1.1rem;background:transparent;border:1px solid var(--border);color:var(--text2);font-family:'Space Mono',monospace;font-size:11px;border-radius:var(--radius2);cursor:pointer}
+
+/* ── TOAST ── */
+.toast{position:fixed;bottom:2rem;left:50%;transform:translateX(-50%) translateY(100px);background:var(--accent);color:var(--bg);font-family:'Space Mono',monospace;font-size:11px;font-weight:700;letter-spacing:1px;padding:0.6rem 1.25rem;border-radius:var(--radius2);transition:transform 0.3s ease;z-index:9998;text-transform:uppercase;pointer-events:none}
+.toast.show{transform:translateX(-50%) translateY(0)}
+
+/* ── LOADING ── */
+#loading-overlay{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:998;flex-direction:column;gap:1rem}
+.spinner{width:32px;height:32px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── RESPONSIVE ── */
+@media(max-width:768px){
+  .overview-grid{grid-template-columns:1fr 1fr}
+  .courses-grid{grid-template-columns:1fr}
+  .week-grid{grid-template-columns:repeat(4,1fr)}
+  .goals-full{grid-template-columns:1fr}
+  .form-row{grid-template-columns:1fr 1fr}
+  main{padding:1rem}
+  nav,header{padding-left:1rem;padding-right:1rem}
+}
+@media(max-width:480px){
+  .overview-grid{grid-template-columns:1fr}
+  .week-grid{grid-template-columns:repeat(2,1fr)}
+  .form-row{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="scanline"></div>
+<div class="toast" id="toast"></div>
+
+<!-- LOADING -->
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <div style="font-family:'Space Mono',monospace;font-size:11px;color:var(--text2);letter-spacing:2px">CARREGANDO...</div>
+</div>
+
+<!-- LOGIN -->
+<div id="login-screen" style="display:none">
+  <div class="login-card">
+    <div class="login-logo">Concept Art Tracker</div>
+    <div class="login-title">Bem-vindo de volta</div>
+    <div class="login-sub">Seu plano de estudos sincronizado em qualquer dispositivo.</div>
+    <button class="google-btn" onclick="doLogin()">
+      <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+        <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+        <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
+        <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+      </svg>
+      Entrar com Google
+    </button>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app-screen" style="display:none">
+  <header>
+    <div>
+      <div class="logo">Concept Art Tracker <span>// Rodrigo</span></div>
+      <div style="font-size:11px;color:var(--text3);margin-top:2px;font-family:'Space Mono',monospace">plano de estudos · 2025</div>
+    </div>
+    <div class="header-right">
+      <div class="date-display" id="dateDisplay"></div>
+      <div class="user-info">
+        <img id="user-avatar" class="user-avatar" src="" alt="">
+        <span class="user-name-label" id="user-name"></span>
+        <button class="logout-btn" onclick="doLogout()">sair</button>
+      </div>
+      <div class="sync-dot" id="sync-dot" title="Sincronizado"></div>
+    </div>
+  </header>
+
+  <nav>
+    <button class="nav-btn active" data-view="dashboard" onclick="switchView('dashboard',this)">Dashboard</button>
+    <button class="nav-btn" data-view="registro"  onclick="switchView('registro',this)">Registrar</button>
+    <button class="nav-btn" data-view="rotina"    onclick="switchView('rotina',this)">Rotina</button>
+    <button class="nav-btn" data-view="metas"     onclick="switchView('metas',this)">Metas</button>
+    <button class="nav-btn" data-view="stats"     onclick="switchView('stats',this)">Estatísticas</button>
+  </nav>
+
+  <main>
+
+    <!-- DASHBOARD -->
+    <div class="view active" id="view-dashboard">
+      <div class="overview-grid">
+        <div class="stat-card">
+          <div class="stat-label">Horas Totais</div>
+          <div class="stat-value" id="totalHours">0</div>
+          <div class="stat-sub">horas registradas</div>
+        </div>
+        <div class="stat-card purple">
+          <div class="stat-label">Esta Semana</div>
+          <div class="stat-value" id="weekHours">0</div>
+          <div class="stat-sub">últimos 7 dias</div>
+        </div>
+        <div class="stat-card teal">
+          <div class="stat-label">Sessões</div>
+          <div class="stat-value" id="totalSessions">0</div>
+          <div class="stat-sub">total de registros</div>
+        </div>
+      </div>
+
+      <div class="courses-grid">
+        <div class="course-card">
+          <div class="course-header">
+            <div><div class="course-name">Starship Design</div><div style="font-size:11px;color:var(--text2);margin-top:2px">Seg · Qua · Sex</div></div>
+            <div class="course-pct" id="pct-starship">30%</div>
+          </div>
+          <div class="progress-track"><div class="progress-fill" id="bar-starship" style="width:30%"></div></div>
+          <div class="course-meta"><span id="hrs-starship">0h</span><span id="sessions-starship">0 sessões</span></div>
+          <div class="course-actions">
+            <button class="btn-sm" onclick="quickAdjust('Starship Design',-5)">−5%</button>
+            <button class="btn-sm btn-accent" onclick="quickAdjust('Starship Design',5)">+5%</button>
+            <button class="btn-sm" onclick="setProgress('Starship Design')">definir %</button>
+          </div>
+        </div>
+        <div class="course-card">
+          <div class="course-header">
+            <div><div class="course-name">Prometheus</div><div style="font-size:11px;color:var(--text2);margin-top:2px">Terça</div></div>
+            <div class="course-pct" id="pct-prometheus">10%</div>
+          </div>
+          <div class="progress-track"><div class="progress-fill" id="bar-prometheus" style="width:10%"></div></div>
+          <div class="course-meta"><span id="hrs-prometheus">0h</span><span id="sessions-prometheus">0 sessões</span></div>
+          <div class="course-actions">
+            <button class="btn-sm" onclick="quickAdjust('Prometheus',-5)">−5%</button>
+            <button class="btn-sm btn-accent" onclick="quickAdjust('Prometheus',5)">+5%</button>
+            <button class="btn-sm" onclick="setProgress('Prometheus')">definir %</button>
+          </div>
+        </div>
+        <div class="course-card">
+          <div class="course-header">
+            <div><div class="course-name">Concept Art Geral</div><div style="font-size:11px;color:var(--text2);margin-top:2px">Sábado</div></div>
+            <div class="course-pct" id="pct-general">15%</div>
+          </div>
+          <div class="progress-track"><div class="progress-fill" id="bar-general" style="width:15%"></div></div>
+          <div class="course-meta"><span id="hrs-general">0h</span><span id="sessions-general">0 sessões</span></div>
+          <div class="course-actions">
+            <button class="btn-sm" onclick="quickAdjust('Concept Art Geral',-5)">−5%</button>
+            <button class="btn-sm btn-accent" onclick="quickAdjust('Concept Art Geral',5)">+5%</button>
+            <button class="btn-sm" onclick="setProgress('Concept Art Geral')">definir %</button>
+          </div>
+        </div>
+        <div class="course-card">
+          <div class="course-header">
+            <div><div class="course-name">Projeto Pessoal</div><div style="font-size:11px;color:var(--text2);margin-top:2px">Domingo · Império em Guerra</div></div>
+            <div class="course-pct" style="color:var(--red)">—</div>
+          </div>
+          <div class="progress-track"><div class="progress-fill" id="bar-personal" style="width:0%;background:linear-gradient(90deg,var(--red),#e07a52)"></div></div>
+          <div class="course-meta"><span id="hrs-personal">0h</span><span id="sessions-personal">0 sessões</span></div>
+          <div class="course-actions" style="opacity:0.3;pointer-events:none"><span style="font-size:11px;font-family:'Space Mono',monospace;color:var(--text3)">projeto livre</span></div>
+        </div>
+      </div>
+
+      <div class="goals-section">
+        <div class="section-title">Metas do Plano</div>
+        <div id="goals-list-dash"></div>
+      </div>
+    </div>
+
+    <!-- REGISTRO -->
+    <div class="view" id="view-registro">
+      <div class="log-form">
+        <div class="section-title">Nova Sessão de Estudo</div>
+        <div class="form-row">
+          <div class="form-group"><label>Data</label><input type="date" id="input-date"></div>
+          <div class="form-group"><label>Curso</label>
+            <select id="input-course">
+              <option value="Starship Design">Starship Design</option>
+              <option value="Prometheus">Prometheus</option>
+              <option value="Concept Art Geral">Concept Art Geral</option>
+              <option value="Projeto Pessoal">Projeto Pessoal</option>
+            </select>
+          </div>
+          <div class="form-group"><label>Horas</label><input type="number" id="input-hours" min="0.25" max="8" step="0.25" placeholder="ex: 1.5"></div>
+        </div>
+        <div class="form-row-2">
+          <div class="form-group"><label>Tipo</label>
+            <select id="input-type">
+              <option>Aula</option><option>Exercício</option><option>Revisão</option><option>Projeto</option>
+            </select>
+          </div>
+          <div class="form-group"><label>Aula / Tópico</label><input type="text" id="input-topic" placeholder="ex: Módulo 3 — Silhuetas"></div>
+        </div>
+        <div class="form-group" style="margin-bottom:1rem"><label>Observações</label><textarea id="input-notes" placeholder="O que você praticou?"></textarea></div>
+        <div style="display:flex;gap:0.75rem;align-items:center">
+          <button class="btn-primary" onclick="saveSession()">Registrar Sessão</button>
+          <span id="save-confirm" style="font-family:'Space Mono',monospace;font-size:11px;color:var(--green);opacity:0;transition:opacity 0.3s">✓ salvo</span>
+        </div>
+      </div>
+      <div class="log-table">
+        <table><thead><tr><th>Data</th><th>Curso</th><th>Horas</th><th>Tipo</th><th>Tópico</th><th>Obs</th><th></th></tr></thead>
+        <tbody id="sessions-tbody"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ROTINA -->
+    <div class="view" id="view-rotina">
+      <div style="margin-bottom:1.5rem">
+        <div class="section-title">Rotina Semanal</div>
+        <div style="font-size:12px;color:var(--text2)">Marque os dias que você completou esta semana. Reinicia automaticamente toda semana.</div>
+      </div>
+      <div class="week-grid" id="week-grid"></div>
+      <div class="streak-bar">
+        <div class="section-title">Progresso desta semana</div>
+        <div style="display:flex;gap:0.5rem;margin-top:0.75rem;align-items:center;flex-wrap:wrap" id="streak-dots"></div>
+      </div>
+    </div>
+
+    <!-- METAS -->
+    <div class="view" id="view-metas">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem">
+        <div>
+          <div class="section-title">Objetivos e Milestones</div>
+          <div style="font-size:12px;color:var(--text2)">Crie, edite e acompanhe suas metas.</div>
+        </div>
+        <button class="btn-primary" onclick="openGoalModal()">+ Nova Meta</button>
+      </div>
+      <div class="goals-full" id="goals-full"></div>
+      <div id="empty-goals" style="display:none">
+        <div style="text-align:center;padding:3rem;color:var(--text3);font-family:'Space Mono',monospace;font-size:12px">
+          // nenhuma meta cadastrada ainda<br><br>
+          <button class="btn-sm btn-accent" onclick="openGoalModal()" style="margin-top:0.5rem">+ criar primeira meta</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL META -->
+    <div class="modal-backdrop" id="goalModal" style="display:none" onclick="if(event.target===this)closeGoalModal()">
+      <div class="modal">
+        <div class="modal-title" id="modalTitle">Nova Meta</div>
+        <div class="form-group" style="margin-bottom:0.85rem"><label>Área / Título</label><input type="text" id="modal-area" placeholder="ex: Starship Design"></div>
+        <div class="form-group" style="margin-bottom:1.25rem"><label>Descrição da Meta</label><input type="text" id="modal-meta" placeholder="ex: Concluir curso e criar 3 projetos"></div>
+        <div class="modal-actions">
+          <button class="btn-cancel" onclick="closeGoalModal()">Cancelar</button>
+          <button class="btn-primary" onclick="saveGoalModal()">Salvar Meta</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ESTATÍSTICAS -->
+    <div class="view" id="view-stats">
+      <div class="chart-section" style="margin-bottom:1.5rem">
+        <div class="section-title">Horas por Semana</div>
+        <div class="chart-wrap"><canvas id="chartWeekly"></canvas></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+        <div class="chart-section"><div class="section-title">Por Curso</div><div class="chart-wrap" style="height:180px"><canvas id="chartCourses"></canvas></div></div>
+        <div class="chart-section"><div class="section-title">Tipo de Sessão</div><div class="chart-wrap" style="height:180px"><canvas id="chartTypes"></canvas></div></div>
+      </div>
+      <div style="margin-top:1rem;background:var(--bg2);border:1px solid var(--border2);border-radius:var(--radius);padding:1.5rem">
+        <div class="section-title">Recordes</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-top:0.75rem" id="records-grid"></div>
+      </div>
+    </div>
+
+  </main>
+</div><!-- /app-screen -->
+
+<script>
+// ── Constantes ────────────────────────────────────────────────────────────────
+const COURSES=['Starship Design','Prometheus','Concept Art Geral','Projeto Pessoal'];
+const COURSE_TAGS={'Starship Design':'tag-starship','Prometheus':'tag-prometheus','Concept Art Geral':'tag-general','Projeto Pessoal':'tag-personal'};
+const COURSE_KEYS={'Starship Design':'starship','Prometheus':'prometheus','Concept Art Geral':'general','Projeto Pessoal':'personal'};
+const COURSE_COLORS={'Starship Design':'#7b5ea7','Prometheus':'#4aa8a0','Concept Art Geral':'#c8a96e','Projeto Pessoal':'#e05252'};
+const DAYS=[
+  {name:'Segunda',course:'Starship Design',time:'1h30–2h',goal:'Aulas e exercícios'},
+  {name:'Terça',course:'Prometheus',time:'45min–1h',goal:'Fundamentos'},
+  {name:'Quarta',course:'Starship Design',time:'1h30–2h',goal:'Continuar módulo'},
+  {name:'Quinta',course:'Livre/Descanso',time:'0–1h',goal:'Recuperação'},
+  {name:'Sexta',course:'Starship Design',time:'1h30–2h',goal:'Aplicação prática'},
+  {name:'Sábado',course:'Concept Art Geral',time:'1h–2h',goal:'Workflow e repertório'},
+  {name:'Domingo',course:'Projeto Pessoal',time:'1h30–2h',goal:'Consolidar aprendizado'}
+];
+const DEFAULT_GOALS=[
+  {id:1,area:'Starship Design',meta:'Concluir curso e criar 2-3 projetos',milestones:[{id:101,text:'Concluir módulo de silhuetas',done:false},{id:102,text:'Criar 1 design finalizado',done:false},{id:103,text:'Criar 2° design com feedback',done:false}]},
+  {id:2,area:'Prometheus',meta:'Dominar fundamentos principais',milestones:[{id:201,text:'Completar módulo de perspectiva',done:false},{id:202,text:'Dominar valores e luz',done:false},{id:203,text:'Aplicar em 1 exercício',done:false}]},
+  {id:3,area:'Concept Art Geral',meta:'Completar curso inteiro',milestones:[{id:301,text:'Finalizar primeira metade',done:false},{id:302,text:'Completar workflow completo',done:false},{id:303,text:'Exportar projeto do curso',done:false}]},
+  {id:4,area:'Portfólio',meta:'3 peças finalizadas para Instagram/ArtStation',milestones:[{id:401,text:'1ª peça publicada',done:false},{id:402,text:'2ª peça publicada',done:false},{id:403,text:'3ª peça + ArtStation ativo',done:false}]}
+];
+
+function defaultData(){
+  return{sessions:[],progress:{'Starship Design':30,'Prometheus':10,'Concept Art Geral':15},
+    goals:JSON.parse(JSON.stringify(DEFAULT_GOALS)),
+    weekDays:[false,false,false,false,false,false,false],weekKey:''};
+}
+
+function migrateData(d){
+  if(!d.goals||!Array.isArray(d.goals)||typeof d.goals[0]==='boolean'){
+    d.goals=JSON.parse(JSON.stringify(DEFAULT_GOALS));
+  }
+  if(!d.sessions)d.sessions=[];
+  if(!d.progress)d.progress={'Starship Design':30,'Prometheus':10,'Concept Art Geral':15};
+  if(!d.weekDays)d.weekDays=[false,false,false,false,false,false,false];
+  const wk=getWeekKey();
+  if(d.weekKey!==wk){d.weekKey=wk;d.weekDays=[false,false,false,false,false,false,false];}
+}
+
+// window._data é inicializado pelo módulo Firebase acima
+function data(){return window._data||defaultData()}
+function save(){setSyncState('syncing');window.persistData().then(()=>setSyncState('ok')).catch(()=>setSyncState('ok'))}
+
+function setSyncState(s){
+  const dot=document.getElementById('sync-dot');if(!dot)return;
+  dot.classList.toggle('syncing',s==='syncing');
+  dot.title=s==='syncing'?'Salvando...':'Sincronizado';
+}
+
+function getWeekKey(){
+  const n=new Date();const d=new Date(n);d.setHours(0,0,0,0);
+  d.setDate(d.getDate()-((d.getDay()+6)%7));return d.toISOString().split('T')[0];
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+function showToast(msg){
+  const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2200);
+}
+
+let chartWeekly=null,chartCourses=null,chartTypes=null;
+let editingGoalId=null;
+
+window.switchView=function(v,btn){
+  document.querySelectorAll('.view').forEach(el=>el.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(el=>el.classList.remove('active'));
+  document.getElementById('view-'+v).classList.add('active');
+  btn.classList.add('active');
+  const renders={dashboard:renderDashboard,registro:renderSessions,rotina:renderRotina,metas:renderMetas,stats:renderStats};
+  if(renders[v])renders[v]();
+};
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+window.renderDashboard=function(){
+  const d=data();const sess=d.sessions;
+  const total=sess.reduce((s,r)=>s+r.hours,0);
+  document.getElementById('totalHours').textContent=total.toFixed(1);
+  document.getElementById('totalSessions').textContent=sess.length;
+  const week=new Date();week.setDate(week.getDate()-7);
+  document.getElementById('weekHours').textContent=sess.filter(r=>new Date(r.date)>=week).reduce((s,r)=>s+r.hours,0).toFixed(1);
+
+  COURSES.forEach(c=>{
+    const k=COURSE_KEYS[c];const cs=sess.filter(r=>r.course===c);
+    const ch=cs.reduce((s,r)=>s+r.hours,0);const pct=d.progress[c]||0;
+    if(document.getElementById('pct-'+k)){
+      document.getElementById('pct-'+k).textContent=pct+'%';
+      document.getElementById('bar-'+k).style.width=pct+'%';
+      document.getElementById('hrs-'+k).textContent=ch.toFixed(1)+'h';
+      document.getElementById('sessions-'+k).textContent=cs.length+' sessões';
+    }
+  });
+
+  const gl=document.getElementById('goals-list-dash');gl.innerHTML='';
+  (d.goals||[]).forEach(g=>{
+    const allDone=g.milestones.length>0&&g.milestones.every(m=>m.done);
+    gl.innerHTML+=`<div class="goal-item">
+      <div class="goal-check ${allDone?'done':''}">
+        <svg viewBox="0 0 12 12" fill="none"><polyline points="2,6 5,9 10,3" stroke="currentColor" stroke-width="2.5"/></svg>
+      </div>
+      <div class="goal-text ${allDone?'done':''}">${g.meta}</div>
+      <span class="goal-tag">${g.area}</span>
+    </div>`;
+  });
+};
+
+window.quickAdjust=function(course,delta){
+  const d=data();d.progress[course]=Math.max(0,Math.min(100,(d.progress[course]||0)+delta));
+  save();renderDashboard();
+};
+window.setProgress=function(course){
+  const d=data();const v=prompt(`Progresso de "${course}" (atual: ${d.progress[course]||0}%)\nDigite o novo valor (0–100):`);
+  if(v!==null&&!isNaN(parseInt(v))){d.progress[course]=Math.max(0,Math.min(100,parseInt(v)));save();renderDashboard();showToast('Progresso atualizado');}
+};
+
+// ── Registro ──────────────────────────────────────────────────────────────────
+window.saveSession=function(){
+  const date=document.getElementById('input-date').value;
+  const hours=parseFloat(document.getElementById('input-hours').value);
+  if(!date||!hours||isNaN(hours)||hours<=0){alert('Preencha data e horas.');return;}
+  const d=data();
+  d.sessions.unshift({id:Date.now(),date,
+    course:document.getElementById('input-course').value,
+    hours,type:document.getElementById('input-type').value,
+    topic:document.getElementById('input-topic').value.trim(),
+    notes:document.getElementById('input-notes').value.trim()});
+  save();
+  ['input-hours','input-topic','input-notes'].forEach(id=>document.getElementById(id).value='');
+  const c=document.getElementById('save-confirm');c.style.opacity='1';setTimeout(()=>c.style.opacity='0',1800);
+  renderSessions();showToast(hours+'h registradas');
+};
+
+window.renderSessions=function(){
+  const d=data();const tb=document.getElementById('sessions-tbody');
+  if(!d.sessions.length){tb.innerHTML='<tr><td colspan="7"><div style="text-align:center;padding:3rem;color:var(--text3);font-family:Space Mono,monospace;font-size:12px">// nenhuma sessão registrada ainda</div></td></tr>';return;}
+  tb.innerHTML=d.sessions.map(s=>`<tr>
+    <td style="font-family:'Space Mono',monospace;font-size:11px;white-space:nowrap">${s.date}</td>
+    <td><span class="tag ${COURSE_TAGS[s.course]||''}">${s.course}</span></td>
+    <td style="font-family:'Space Mono',monospace;font-weight:700">${s.hours}h</td>
+    <td style="font-size:11px;color:var(--text2)">${s.type||'—'}</td>
+    <td style="font-size:12px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.topic||'—'}</td>
+    <td style="font-size:11px;color:var(--text2);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.notes||'—'}</td>
+    <td><button class="delete-btn" onclick="deleteSession(${s.id})">✕</button></td>
+  </tr>`).join('');
+};
+window.deleteSession=function(id){
+  if(!confirm('Remover esta sessão?'))return;
+  const d=data();d.sessions=d.sessions.filter(s=>s.id!==id);save();renderSessions();showToast('Sessão removida');
+};
+
+// ── Rotina ────────────────────────────────────────────────────────────────────
+window.renderRotina=function(){
+  const d=data();const today=new Date().getDay();
+  const dayOfWeek=[1,2,3,4,5,6,0];
+  document.getElementById('week-grid').innerHTML=DAYS.map((dy,i)=>{
+    const isToday=dayOfWeek[i]===today;const checked=d.weekDays[i]||false;
+    return `<div class="day-card ${isToday?'today':''}">
+      ${isToday?'<span class="today-badge">HOJE</span>':''}
+      <div class="day-name">${dy.name}</div>
+      <div class="day-course">${dy.course}</div>
+      <div class="day-time">${dy.time}</div>
+      <div class="day-goal">${dy.goal}</div>
+      <label class="day-done ${checked?'checked':''}">
+        <input type="checkbox" ${checked?'checked':''} onchange="toggleDay(${i},this)">
+        ${checked?'concluído':'marcar'}
+      </label>
+    </div>`;
+  }).join('');
+  const count=d.weekDays.filter(Boolean).length;
+  document.getElementById('streak-dots').innerHTML=d.weekDays.map((dk,i)=>`
+    <div style="width:36px;height:36px;border-radius:4px;background:${dk?'var(--accent)':'var(--bg3)'};border:1px solid ${dk?'var(--accent)':'var(--border2)'};display:flex;align-items:center;justify-content:center;font-size:9px;font-family:Space Mono,monospace;color:${dk?'var(--bg)':'var(--text3)'}">
+      ${DAYS[i].name.slice(0,3).toUpperCase()}
+    </div>`).join('')+`<div style="margin-left:auto;font-family:'Space Mono',monospace;font-size:12px;color:var(--accent);font-weight:700">${count}/7</div>`;
+};
+window.toggleDay=function(i,el){
+  const d=data();d.weekDays[i]=el.checked;save();renderRotina();
+  if(el.checked)showToast(DAYS[i].name+' concluído ✓');
+};
+
+// ── Metas CRUD ────────────────────────────────────────────────────────────────
+window.openGoalModal=function(id=null){
+  editingGoalId=id;
+  if(id){const g=(data().goals||[]).find(g=>g.id===id);if(!g)return;
+    document.getElementById('modal-area').value=g.area;
+    document.getElementById('modal-meta').value=g.meta;
+    document.getElementById('modalTitle').textContent='Editar Meta';
+  }else{
+    document.getElementById('modal-area').value='';
+    document.getElementById('modal-meta').value='';
+    document.getElementById('modalTitle').textContent='Nova Meta';
+  }
+  document.getElementById('goalModal').style.display='flex';
+  setTimeout(()=>document.getElementById('modal-area').focus(),50);
+};
+window.closeGoalModal=function(){document.getElementById('goalModal').style.display='none';editingGoalId=null;};
+window.saveGoalModal=function(){
+  const area=document.getElementById('modal-area').value.trim();
+  const meta=document.getElementById('modal-meta').value.trim();
+  if(!area||!meta){alert('Preencha área e descrição.');return;}
+  const d=data();if(!d.goals)d.goals=[];
+  if(editingGoalId){const g=d.goals.find(g=>g.id===editingGoalId);if(g){g.area=area;g.meta=meta;}}
+  else{d.goals.push({id:Date.now(),area,meta,milestones:[]});}
+  save();closeGoalModal();renderMetas();showToast(editingGoalId?'Meta atualizada':'Meta criada ✓');
+};
+window.deleteGoal=function(id){
+  if(!confirm('Remover esta meta e todos os milestones?'))return;
+  const d=data();d.goals=d.goals.filter(g=>g.id!==id);save();renderMetas();showToast('Meta removida');
+};
+window.addMilestone=function(goalId){
+  const inp=document.getElementById('ms-input-'+goalId);const text=inp?inp.value.trim():'';
+  if(!text)return;const d=data();const g=d.goals.find(g=>g.id===goalId);
+  if(!g)return;g.milestones.push({id:Date.now(),text,done:false});
+  save();renderMetas();showToast('Milestone adicionado');
+};
+window.toggleMilestoneNew=function(goalId,msId,checked){
+  const d=data();const g=d.goals.find(g=>g.id===goalId);
+  if(!g)return;const ms=g.milestones.find(m=>m.id===msId);
+  if(ms){ms.done=checked;}save();if(checked)showToast('Milestone concluído ✓');renderMetas();
+};
+window.deleteMilestone=function(goalId,msId){
+  const d=data();const g=d.goals.find(g=>g.id===goalId);
+  if(!g)return;g.milestones=g.milestones.filter(m=>m.id!==msId);save();renderMetas();
+};
+
+window.renderMetas=function(){
+  const goals=data().goals||[];
+  const container=document.getElementById('goals-full');
+  const empty=document.getElementById('empty-goals');
+  if(!goals.length){container.innerHTML='';empty.style.display='block';return;}
+  empty.style.display='none';
+  container.innerHTML=goals.map(g=>{
+    const doneCount=g.milestones.filter(m=>m.done).length;
+    const total=g.milestones.length;
+    const pct=total?Math.round((doneCount/total)*100):0;
+    return `<div class="goal-area">
+      <div class="goal-card-actions">
+        <button class="icon-btn" onclick="openGoalModal(${g.id})" title="Editar">✎</button>
+        <button class="icon-btn del" onclick="deleteGoal(${g.id})" title="Remover">✕</button>
+      </div>
+      <div class="goal-area-title">${g.area}</div>
+      <div class="goal-area-desc">${g.meta}</div>
+      <div class="goal-progress"><div class="goal-progress-fill" style="width:${pct}%"></div></div>
+      <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--accent3);margin-top:4px;letter-spacing:1px">${pct}% · ${doneCount}/${total}</div>
+      <div class="milestones">
+        ${g.milestones.map(m=>`<div class="milestone-row">
+          <label class="milestone ${m.done?'done-m':''}" style="flex:1">
+            <input type="checkbox" ${m.done?'checked':''} onchange="toggleMilestoneNew(${g.id},${m.id},this.checked)" style="accent-color:var(--accent2);width:14px;height:14px;cursor:pointer">
+            <span>${m.text}</span>
+          </label>
+          <button class="milestone-del" onclick="deleteMilestone(${g.id},${m.id})">✕</button>
+        </div>`).join('')}
+        ${total===0?'<div style="font-size:11px;color:var(--text3);font-family:Space Mono,monospace;padding:0.25rem 0">// sem milestones ainda</div>':''}
+      </div>
+      <div class="add-milestone-row">
+        <input type="text" id="ms-input-${g.id}" placeholder="+ novo milestone..." onkeydown="if(event.key==='Enter')addMilestone(${g.id})">
+        <button onclick="addMilestone(${g.id})">Adicionar</button>
+      </div>
+    </div>`;
+  }).join('');
+};
+
+// ── Estatísticas ──────────────────────────────────────────────────────────────
+window.renderStats=function(){
+  const sess=data().sessions;
+  const weeks={};
+  sess.forEach(s=>{const d2=new Date(s.date);const st=new Date(d2);st.setDate(d2.getDate()-((d2.getDay()+6)%7));const k=st.toISOString().split('T')[0];weeks[k]=(weeks[k]||0)+s.hours;});
+  const wl=Object.keys(weeks).sort().slice(-12);
+  if(chartWeekly)chartWeekly.destroy();
+  chartWeekly=new Chart(document.getElementById('chartWeekly'),{type:'bar',
+    data:{labels:wl.length?wl.map(k=>{const d2=new Date(k);return d2.getDate()+'/'+(d2.getMonth()+1)}):['sem dados'],
+      datasets:[{data:wl.length?wl.map(k=>+weeks[k].toFixed(1)):[0],backgroundColor:'rgba(200,169,110,0.5)',borderColor:'#c8a96e',borderWidth:1,borderRadius:3}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+      scales:{x:{ticks:{color:'#9b9aaf',font:{size:10}},grid:{color:'rgba(255,255,255,0.04)'}},y:{ticks:{color:'#9b9aaf',font:{size:10}},grid:{color:'rgba(255,255,255,0.04)'}}}}});
+  const ch={};COURSES.forEach(c=>{ch[c]=sess.filter(r=>r.course===c).reduce((s,r)=>s+r.hours,0)});
+  if(chartCourses)chartCourses.destroy();
+  chartCourses=new Chart(document.getElementById('chartCourses'),{type:'doughnut',
+    data:{labels:COURSES,datasets:[{data:COURSES.map(c=>+ch[c].toFixed(1)),backgroundColor:COURSES.map(c=>COURSE_COLORS[c]+'cc'),borderColor:COURSES.map(c=>COURSE_COLORS[c]),borderWidth:1}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#9b9aaf',font:{size:11},boxWidth:12}}}}});
+  const types={};sess.forEach(s=>{types[s.type||'Aula']=(types[s.type||'Aula']||0)+s.hours});
+  if(chartTypes)chartTypes.destroy();
+  chartTypes=new Chart(document.getElementById('chartTypes'),{type:'doughnut',
+    data:{labels:Object.keys(types).length?Object.keys(types):['sem dados'],datasets:[{data:Object.values(types).length?Object.values(types).map(v=>+v.toFixed(1)):[1],backgroundColor:['rgba(123,94,167,0.7)','rgba(74,168,160,0.7)','rgba(200,169,110,0.7)','rgba(224,82,82,0.7)'],borderWidth:1}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#9b9aaf',font:{size:11},boxWidth:12}}}}});
+  const bestDay=Object.entries(sess.reduce((acc,s)=>{acc[s.date]=(acc[s.date]||0)+s.hours;return acc},{})).sort((a,b)=>b[1]-a[1])[0];
+  const totalH=sess.reduce((s,r)=>s+r.hours,0);
+  const streak=(()=>{if(!sess.length)return 0;const days=[...new Set(sess.map(s=>s.date))].sort().reverse();let st=0;let check=new Date().toISOString().split('T')[0];for(const d3 of days){if(d3===check){st++;const dt=new Date(check);dt.setDate(dt.getDate()-1);check=dt.toISOString().split('T')[0]}else if(d3<check)break;}return st;})();
+  document.getElementById('records-grid').innerHTML=`
+    <div style="text-align:center"><div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--text2);letter-spacing:2px;text-transform:uppercase;margin-bottom:0.4rem">Melhor Dia</div><div style="font-size:1.75rem;font-weight:800;color:var(--accent)">${bestDay?bestDay[1].toFixed(1)+'h':'—'}</div><div style="font-size:11px;color:var(--text3)">${bestDay?bestDay[0]:'sem dados'}</div></div>
+    <div style="text-align:center"><div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--text2);letter-spacing:2px;text-transform:uppercase;margin-bottom:0.4rem">Total Geral</div><div style="font-size:1.75rem;font-weight:800;color:var(--accent2)">${totalH.toFixed(1)}h</div><div style="font-size:11px;color:var(--text3)">${sess.length} sessões</div></div>
+    <div style="text-align:center"><div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--text2);letter-spacing:2px;text-transform:uppercase;margin-bottom:0.4rem">Streak Atual</div><div style="font-size:1.75rem;font-weight:800;color:var(--accent3)">${streak} dias</div><div style="font-size:11px;color:var(--text3)">dias seguidos</div></div>`;
+};
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+document.getElementById('dateDisplay').textContent=new Date().toLocaleDateString('pt-BR',{weekday:'long',day:'2-digit',month:'long'});
+document.getElementById('input-date').value=new Date().toISOString().split('T')[0];
+
+// Esconde loading depois que o módulo Firebase resolver auth
+window.addEventListener('load',()=>setTimeout(()=>document.getElementById('loading-overlay').style.display='none',3000));
+</script>
+</body>
+</html>
